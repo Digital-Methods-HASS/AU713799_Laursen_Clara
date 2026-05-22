@@ -1,0 +1,395 @@
+---
+title: "State Apologies"
+author: "Clara Laursen & Liva Rask"
+date: "2026-05-25"
+output: html_document
+---
+
+## Introduction
+
+This project is about official apologies from the Danish state from 1999 to 2025. We work with six apology texts that have been registered as official apologies issued on behalf of the state.
+
+# Research Question
+How does the Danish state use official apologies to acknowledge historical failures and assign responsibility in the period from 1999 to 2025?
+
+To investigate this, we use digital text analysis in RStudio. The script reads the PDF files, cleans the text, divides the texts into words, and creates different analyses and visualizations. We look at word count, sentiment, themes, apology-related word and pronouns and actor groups. 
+The script is part of the final project and is organized so the analysis can be reproduced.
+
+# Setup
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(pdftools)
+library(tidytext)
+library(stringr)
+
+dir.create("output", showWarnings = FALSE)
+```
+
+# Corpus Metadata
+
+```{r metadata}
+metadata <- tribble(
+  ~id, ~year, ~author, ~text_type, ~case, ~text_label, ~source_file,
+  
+  "pnr_1999", 1999, "Poul Nyrup Rasmussen", "joint declaration", "Thule/Inughuit", "Thule/Inughuit declaration 1999", "pnr_1999.pdf",
+  
+  "mindelunden_2005", 2005, "Anders Fogh Rasmussen", "memorial speech", "Occupation/refugees", "Occupation/refugees speech 2005", "mindelunden_2005.pdf",
+  
+  "godhavn_2019", 2019, "Mette Frederiksen", "apology speech", "Godhavn Boys", "Godhavn Boys speech 2019", "godhavn_2019.pdf",
+  
+  "greenlandic_children_letter_2020", 2020, "Mette Frederiksen", "letter", "Greenlandic children 1951", "Greenlandic children letter 2020", "letter_greenlandic_children_2020.pdf",
+  
+  "greenlandic_children_speech_2022", 2022, "Mette Frederiksen", "apology speech", "Greenlandic children 1951", "Greenlandic children speech 2022", "speech_greenlandic_children_2022.pdf",
+  
+  "spiral_case_2025", 2025, "Mette Frederiksen", "apology speech", "Spiral case", "Spiral case speech 2025", "spiral_case_2025.pdf"
+)
+
+metadata
+```
+
+# Text Extraction and Cleaning
+```{r }
+speeches_clean <- metadata %>%
+  mutate(
+    file_path = paste0("data/raw/", source_file),
+    text = map_chr(file_path, ~ paste(pdf_text(.x), collapse = " ")),
+    text_clean = text %>%
+      str_replace_all("\n", " ") %>%
+      str_replace_all("\\s+", " ") %>%
+      str_to_lower(),
+
+    text_clean = if_else(
+      id == "mindelunden_2005",
+      str_replace(
+        text_clean,
+        ".*?deres majestæt, mine damer og herrer",
+        "deres majestæt, mine damer og herrer"
+      ),
+      text_clean
+    )
+  )
+```
+
+
+# Tokenization
+The cleaned texts were divided into individual words.
+
+```{r tokenize}
+tokens <- speeches_clean %>%
+  select(id, year, author, text_type, case, text_label, text_clean) %>%
+  unnest_tokens(word, text_clean)
+
+tokens %>%
+  count(text_label, sort = TRUE)
+```
+
+# Word Count by Text
+
+Before comparing sentiment counts, it is useful to examine the length of each text. Longer texts may naturally contain more sentiment words.
+
+```{r word-count}
+word_counts <- tokens %>%
+  count(id, year, text_label, name = "total_words")
+
+word_counts
+```
+
+```{r word-count-plot, fig.width=10, fig.height=6}
+word_count_plot <- ggplot(word_counts, aes(x = reorder(text_label, year), y = total_words)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Word Count by Apology Text",
+    x = "Text",
+    y = "Total Number of Words"
+  ) +
+  theme_minimal()
+
+word_count_plot
+
+ggsave(
+  "output/word_count_by_text.png",
+  word_count_plot,
+  width = 10,
+  height = 6
+)
+```
+# Danish Sentiment Dictionary
+
+This project uses the Danish AFINN sentiment dictionary. AFINN assigns each word a numerical sentiment score. Positive words have scores above zero, while negative words have scores below zero.
+
+```{r sentiment-dictionary}
+sentiment_dict <- read_tsv(
+  "data/sentiment/AFINN-da-32.txt",
+  col_names = c("word", "score")
+) %>%
+  mutate(
+    sentiment = case_when(
+      score > 0 ~ "positive",
+      score < 0 ~ "negative",
+      TRUE ~ "neutral"
+    )
+  )
+
+head(sentiment_dict)
+```
+
+# Sentiment Analysis
+
+The tokenized texts are joined with the Danish AFINN dictionary.
+
+```{r sentiment-analysis}
+sentiment_tokens <- tokens %>%
+  inner_join(sentiment_dict, by = "word")
+
+sentiment_counts <- sentiment_tokens %>%
+  count(id, year, text_label, sentiment)
+
+sentiment_counts
+```
+
+```{r sentiment-plot, fig.width=10, fig.height=6}
+sentiment_plot <- ggplot(sentiment_counts, aes(x = reorder(text_label, year), y = n, fill = sentiment)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Positive and Negative Sentiment in Official Danish Apology Texts",
+    x = "Text",
+    y = "Number of Sentiment Words",
+    fill = "Sentiment"
+  ) +
+  theme_minimal()
+
+sentiment_plot
+
+ggsave(
+  "output/sentiment_distribution_by_text.png",
+  sentiment_plot,
+  width = 10,
+  height = 6
+)
+```
+# Total Sentiment Score by Text
+
+AFINN assigns each sentiment word a numerical score. This plot shows the total sentiment score for each text. A negative score does not necessarily mean that the apology has a negative function; it may reflect the recognition of harm, suffering and injustice.
+
+```{r sentiment-score}
+sentiment_score <- sentiment_tokens %>%
+  group_by(id, year, text_label) %>%
+  summarise(total_score = sum(score), .groups = "drop")
+
+sentiment_score
+
+write_csv(sentiment_score, "output/total_sentiment_score_by_text.csv")
+```
+
+```{r sentiment-score-plot, fig.width=10, fig.height=6}
+sentiment_score_plot <- ggplot(sentiment_score, aes(x = reorder(text_label, year), y = total_score)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Total Sentiment Score by Apology Text",
+    x = "Text",
+    y = "Total AFINN Sentiment Score"
+  ) +
+  theme_minimal()
+
+sentiment_score_plot
+
+ggsave(
+  "output/total_sentiment_score_by_text.png",
+  sentiment_score_plot,
+  width = 10,
+  height = 6
+)
+```
+# Thematic Dictionary Analysis
+
+In addition to sentiment analysis, we created a small thematic dictionary to examine words related to responsibility, harm, apology, state actors, reconciliation and the future.
+
+```{r thematic-dictionary}
+theme_dict <- tribble(
+  ~word, ~theme,
+  
+  "ansvar", "responsibility",
+  "ansvaret", "responsibility",
+  "ansvarlig", "responsibility",
+  "skyld", "responsibility",
+  "svigt", "responsibility",
+  "svigtet", "responsibility",
+  "fejl", "responsibility",
+  "forkert", "responsibility",
+  
+  "smerte", "harm",
+  "smerten", "harm",
+  "overgreb", "harm",
+  "uret", "harm",
+  "lidelse", "harm",
+  "lidelser", "harm",
+  "skam", "harm",
+  "hjerteløst", "harm",
+  "umenneskeligt", "harm",
+  "fortræd", "harm",
+  "krænket", "harm",
+  
+  "undskyld", "apology",
+  "undskyldning", "apology",
+  "beklage", "apology",
+  "beklager", "apology",
+  "utoqqatserpugut", "apology",
+  
+  "danmark", "state",
+  "staten", "state",
+  "regeringen", "state",
+  "myndigheder", "state",
+  "myndighederne", "state",
+  "samfundet", "state",
+  "rigsfællesskabet", "state",
+  
+  "respekt", "reconciliation",
+  "anerkendelse", "reconciliation",
+  "tillid", "reconciliation",
+  "ligeværdighed", "reconciliation",
+  "samhørighed", "reconciliation",
+  "retfærdighed", "reconciliation",
+  "oprejsning", "reconciliation",
+  
+  "fremtid", "future",
+  "kommende", "future",
+  "generationer", "future",
+  "ny", "future"
+)
+
+theme_counts <- tokens %>%
+  inner_join(theme_dict, by = "word") %>%
+  count(text_label, year, theme, sort = TRUE)
+
+theme_counts
+
+write_csv(theme_counts, "output/thematic_dictionary_counts.csv")
+```
+
+```{r thematic-dictionary-plot, fig.width=12, fig.height=8}
+theme_plot <- ggplot(theme_counts, aes(x = theme, y = n)) +
+  geom_col() +
+  facet_wrap(~ text_label, scales = "free_y") +
+  labs(
+    title = "Themes in Official Danish Apology Texts",
+    x = "Theme",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+theme_plot
+
+ggsave(
+  "output/thematic_dictionary_analysis.png",
+  theme_plot,
+  width = 12,
+  height = 8
+)
+```
+# Apology-related Words
+
+This analysis focuses specifically on words directly related to apology.
+
+```{r apology-words}
+apology_words <- c(
+  "undskyld",
+  "undskyldning",
+  "undskyldninger",
+  "beklage",
+  "beklager",
+  "beklagede",
+  "utoqqatserpugut"
+)
+
+apology_counts <- tokens %>%
+  filter(word %in% apology_words) %>%
+  count(id, year, text_label, word, sort = TRUE)
+
+apology_counts
+
+write_csv(apology_counts, "output/apology_word_counts.csv")
+```
+
+```{r apology-words-plot, fig.width=10, fig.height=6}
+apology_plot <- ggplot(apology_counts, aes(x = reorder(text_label, year), y = n, fill = word)) +
+  geom_col(position = "stack") +
+  coord_flip() +
+  labs(
+    title = "Apology-related Words in the Corpus",
+    x = "Text",
+    y = "Frequency",
+    fill = "Word"
+  ) +
+  theme_minimal()
+
+apology_plot
+
+ggsave(
+  "output/apology_words_over_time.png",
+  apology_plot,
+  width = 10,
+  height = 6
+)
+```
+
+# Victim Address and State Actors
+
+This analysis groups pronouns and actors into broader categories: words that address victims directly, words that refer to the speaker, words that refer to collective actors, and words that refer to the state.
+
+```{r actor-groups}
+actor_groups <- tribble(
+  ~word, ~actor_group,
+
+  "du", "victim address",
+  "dig", "victim address",
+  "jer", "victim address",
+  "jeres", "victim address",
+
+  "jeg", "speaker",
+
+  "vi", "collective actor",
+  "os", "collective actor",
+  "vores", "collective actor",
+
+  "danmark", "state actor",
+  "staten", "state actor",
+  "regeringen", "state actor",
+  "myndigheder", "state actor",
+  "myndighederne", "state actor",
+  "rigsfællesskabet", "state actor"
+)
+
+
+actor_group_counts <- tokens %>%
+  inner_join(actor_groups, by = "word") %>%
+  count(text_label, year, actor_group, sort = TRUE)
+
+actor_group_counts
+
+write_csv(actor_group_counts, "output/actor_group_counts.csv")
+```
+
+```{r actor-groups-plot, fig.width=10, fig.height=6}
+actor_groups_plot <- ggplot(actor_group_counts, aes(x = reorder(text_label, year), y = n, fill = actor_group)) +
+  geom_col(position = "stack") +
+  coord_flip() +
+  labs(
+    title = "Victim Address and State Actors in Apology Texts",
+    x = "Text",
+    y = "Frequency",
+    fill = "Actor Group"
+  ) +
+  theme_minimal()
+
+actor_groups_plot
+
+ggsave(
+  "output/victim_address_state_actors.png",
+  actor_groups_plot,
+  width = 10,
+  height = 6
+)
+```
